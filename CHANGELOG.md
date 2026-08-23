@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Fixed false `Continuum canvas guidance unavailable` diagnostics in the real ComfyUI `INPUT_IS_LIST` execution path. Canvas guidance now soft-normalizes the same exact singleton-list `H3FACEXFORM` contract as `H3 Continuum Face Refine` before reading tracker geometry, while preserving the original list object for downstream refinement and still failing soft on genuinely missing or ambiguous transform geometry.
+- Added regression coverage for scalar, singleton-list, nested-singleton, and ambiguous-list canvas-guidance inputs, including the actual outer-wrapper delegation shape used by ComfyUI.
 - Reduced redundant InsightFace work in stable multi-face scenes. Clear motion association now uses periodic 12-frame crowd identity checkpoints instead of evaluating identity on every frame in the expanded crowd window; ambiguity, implausible motion, tracking gaps, and singleton crowd transitions still force immediate identity checks.
 - Added explicit InsightFace/ONNX Runtime backend diagnostics. `H3 Face Track + Crop` now reports the active identity provider in its own report and emits a direct warning before expensive identity work when `CUDAExecutionProvider` is unavailable and InsightFace is falling back to CPU.
 - Fixed pathological `H3 Face Track + Crop` runtimes after the target is lost while another face remains visible. A smoothly continuing already-rejected YOLO face is now cached as a negative tracklet and InsightFace reacquisition is probed sparsely instead of re-running full face analysis on every rejected frame.

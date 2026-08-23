@@ -41,20 +41,53 @@ def test_larger_canvas_reports_spatial_cost_relative_to_512():
     assert "not merely to make magnification >= 1.0x" in message
 
 
-def test_canvas_guidance_wrapper_prints_before_delegating(capsys):
+def test_guidance_accepts_comfy_input_is_list_singleton_transform():
+    transform = _transform((512, 512), [704.0, 400.0])
+
+    direct = quality.continuum_canvas_guidance(transform)
+    listed = quality.continuum_canvas_guidance([transform])
+    nested = quality.continuum_canvas_guidance([[transform]])
+
+    assert listed == direct
+    assert nested == direct
+    assert "512x512 validated baseline" in listed
+    assert "guidance unavailable" not in listed
+
+
+def test_canvas_guidance_wrapper_handles_real_input_is_list_shape_without_mutating_it(capsys):
+    transform = _transform((512, 512), [704.0])
+    listed_transform = [transform]
+    listed_crops = ["crops"]
+    observed = {}
+
     class Base:
-        def refine(self, crops, transform, *args, **kwargs):
+        def refine(self, crops, received_transform, *args, **kwargs):
+            observed["crops"] = crops
+            observed["transform"] = received_transform
             print("BASE_REFINE")
             return (crops, "ok")
 
     wrapped = quality.build_continuum_canvas_guidance(Base)()
-    result = wrapped.refine("crops", _transform((512, 512), [704.0]))
+    result = wrapped.refine(listed_crops, listed_transform)
 
-    assert result == ("crops", "ok")
+    assert result == (listed_crops, "ok")
+    assert observed["crops"] is listed_crops
+    assert observed["transform"] is listed_transform
     lines = capsys.readouterr().out.splitlines()
     assert "512x512 validated baseline" in lines[0]
+    assert "guidance unavailable" not in lines[0]
     assert lines[1] == "BASE_REFINE"
 
 
 def test_canvas_guidance_fails_soft_when_geometry_is_missing():
     assert "guidance unavailable" in quality.continuum_canvas_guidance({"boxes": []})
+
+
+def test_canvas_guidance_fails_soft_for_ambiguous_transform_list():
+    first = _transform((512, 512), [400.0])
+    second = _transform((512, 512), [400.0])
+
+    message = quality.continuum_canvas_guidance([first, second])
+
+    assert "guidance unavailable" in message
+    assert "exactly one transform mapping" in message

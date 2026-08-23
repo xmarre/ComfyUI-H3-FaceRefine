@@ -19,6 +19,7 @@ Important invariants:
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 import importlib.util
 import sys
 from pathlib import Path
@@ -96,6 +97,16 @@ def _remove_residual_bias(delta: torch.Tensor, mask: torch.Tensor, amount: float
     return delta - mean * amount
 
 
+def _guidance_transform(value):
+    """Soft-normalize the same singleton-list contract as Continuum's INPUT_IS_LIST node."""
+
+    while isinstance(value, list):
+        if len(value) != 1:
+            return None
+        value = value[0]
+    return value if isinstance(value, Mapping) else None
+
+
 def continuum_canvas_guidance(transform) -> str:
     """Return Continuum-specific canvas guidance from a tracker transform.
 
@@ -105,10 +116,22 @@ def continuum_canvas_guidance(transform) -> str:
     full-resolution frame remains the baseline and only the learned residual is transferred.
     Therefore sub-1x magnification is informational on the Continuum path, not a reason to
     grow the canvas until it matches the largest crop.
+
+    ``H3ContinuumFaceRefine`` declares ``INPUT_IS_LIST = True``. The outer guidance
+    wrapper therefore sees ``transform`` as a singleton list before the production refine
+    implementation calls its strict ``_single`` normalizer. Diagnostics must understand
+    that same shape without modifying the value delegated downstream.
     """
 
-    canvas = transform.get("canvas") if isinstance(transform, dict) else None
-    boxes = transform.get("boxes") if isinstance(transform, dict) else None
+    transform = _guidance_transform(transform)
+    if transform is None:
+        return (
+            "Continuum canvas guidance unavailable: H3FACEXFORM must resolve to exactly "
+            "one transform mapping"
+        )
+
+    canvas = transform.get("canvas")
+    boxes = transform.get("boxes")
     if not isinstance(canvas, (tuple, list)) or len(canvas) != 2:
         return "Continuum canvas guidance unavailable: H3FACEXFORM is missing canvas geometry"
 
