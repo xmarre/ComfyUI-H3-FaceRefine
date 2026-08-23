@@ -1,11 +1,15 @@
 """Tracking and face-region geometry correctness fixes for H3 FaceRefine.
 
-The stock tracker mixes geometry from two face detectors, only enables identity
-tracking when frame zero is already crowded, accepts unrelated lone detections,
-and assumes a clamped crop still keeps the face at canvas centre. This module
-keeps one geometry source (the configured YOLO detector), uses InsightFace only
-for identity scores, predicts motion across short gaps, bounds temporal-smoothing
-lag, and maps the tracked face rectangle through the actual crop transform.
+The tracker needs two related trajectories with different jobs:
+
+* a stabilized crop trajectory, so H3 sees steady context;
+* responsive face geometry, so the refine/SAM mask stays on the face inside that crop.
+
+The original implementation collapsed those into one smoothed centre and also mixed
+YOLO and InsightFace boxes. This module keeps the configured YOLO detector as the
+sole geometry source, uses InsightFace only for identity selection, predicts motion
+for association, bounds crop lag, and maps responsive face geometry through the
+actual (possibly frame-edge-clamped) crop transform.
 """
 
 from __future__ import annotations
@@ -70,7 +74,7 @@ def _predict_track_state(
     dx = float(np.median(vx)) * gap if vx else 0.0
     dy = float(np.median(vy)) * gap if vy else 0.0
 
-    # Prevent one noisy velocity sample from projecting arbitrarily far through a gap.
+    # Never let one noisy velocity sample project arbitrarily far through a dropout.
     max_disp = last_h * (1.5 + 0.5 * min(gap, 4))
     disp = math.hypot(dx, dy)
     if disp > max_disp > 0.0:
@@ -122,6 +126,7 @@ def _crowded_frames(detections, radius: int = 2) -> list[bool]:
 
 
 def _match_embedding_to_box(module, candidates, box):
+    """Map InsightFace identity data onto a YOLO box without adopting its geometry."""
     if not candidates:
         return None
     overlaps = [float(module._iou(cand_box, box)) for cand_box, _emb in candidates]
@@ -129,8 +134,6 @@ def _match_embedding_to_box(module, candidates, box):
     if overlaps[best] >= 0.10:
         return candidates[best][1]
 
-    # Detector boxes are not pixel-identical. Permit a centre-near match while refusing
-    # an embedding that clearly belongs to a different face.
     cx, cy, h, _w = _box_state(box)
     distances = []
     for cand_box, _emb in candidates:
@@ -183,8 +186,8 @@ def _build_anchor_from_track(
     if len(embeddings) == 1:
         return embeddings[0], 1
 
-    # Preserve the identity selected at the start. A later accidental geometry crossing
-    # must not become the majority and silently redefine the subject anchor.
+    # Anchor to the initially selected identity. A later accidental crossing must not
+    # redefine the target merely because more samples came from the wrong person.
     stack = np.stack(embeddings)
     seed = stack[0]
     keep = (stack @ seed) >= _ANCHOR_INLIER_SIM
@@ -271,14 +274,13 @@ def _associate_boxes(
                 )
                 best_i = int(np.argmax(scores)) if scores else -1
                 if best_i >= 0 and scores[best_i] >= float(identity_threshold):
-                    # Identity selects WHICH YOLO box. Never use InsightFace bbox geometry.
                     chosen = boxes[best_i]
                     identity_passed = True
                     stats["identity"] += 1
 
-            # Low-confidence identity may fall back to continuity only while continuity
-            # itself is trustworthy. Across gaps/crowd transitions, rejecting a candidate
-            # is safer than recreating the old silent subject-switch failure.
+            # Identity failure may fall back to continuity only while continuity itself
+            # is trustworthy. Across gaps/crowd transitions, a miss is safer than silently
+            # replacing the subject with a nearby bystander.
             if (
                 chosen is None
                 and gate_ok
@@ -316,6 +318,7 @@ def _choose_body_for_track(
 
 
 def _median3(values):
+    """One-frame impulse rejection that preserves sustained movement and step changes."""
     values = np.asarray(values, dtype=np.float64)
     if values.size < 3:
         return values.copy()
@@ -327,13 +330,19 @@ def _median3(values):
 
 
 def _bound_center_lag(raw_cx, raw_cy, smooth_cx, smooth_cy, face_h):
+    """Stabilize the crop while retaining a separate responsive face trajectory.
+
+    The responsive median-3 trajectory is the geometry truth used for face masks. The
+    smoothed trajectory is only the crop centre and may deviate by at most 12% of face
+    height, leaving enough stability to suppress box jitter without visibly trailing a
+    real head movement.
+    """
     raw_cx = np.asarray(raw_cx, dtype=np.float64)
     raw_cy = np.asarray(raw_cy, dtype=np.float64)
     smooth_cx = np.asarray(smooth_cx, dtype=np.float64).copy()
     smooth_cy = np.asarray(smooth_cy, dtype=np.float64).copy()
     face_h = np.asarray(face_h, dtype=np.float64)
 
-    # Median-3 removes an isolated detector spike while preserving ramps/step-like motion.
     responsive_cx = _median3(raw_cx)
     responsive_cy = _median3(raw_cy)
     dx = responsive_cx - smooth_cx
@@ -354,6 +363,8 @@ def _bound_center_lag(raw_cx, raw_cy, smooth_cx, smooth_cy, face_h):
     return (
         smooth_cx,
         smooth_cy,
+        responsive_cx,
+        responsive_cy,
         float(distance.max(initial=0.0)),
         float(guarded.max(initial=0.0)),
     )
@@ -368,6 +379,7 @@ def _face_rect_in_canvas(
     canvas_width: int,
     canvas_height: int,
 ):
+    """Map source-space face geometry through the exact source->crop->canvas transform."""
     x, y, bw, bh = (float(v) for v in crop_box)
     if bw <= 0.0 or bh <= 0.0:
         raise ValueError(f"invalid crop box for face mapping: {crop_box!r}")
@@ -410,8 +422,8 @@ def _run_fixed(
     B, H, W, _ = images.shape
     import comfy.model_management as _mm
 
-    # Detect once. Identity logic works from these boxes rather than running a second YOLO
-    # pass, and every accepted frame keeps the configured detector's geometry.
+    # Detect once. Identity logic consumes these boxes instead of running a second YOLO
+    # pass, and every accepted frame retains the configured detector's exact geometry.
     detections = []
     for i in range(B):
         _mm.throw_exception_if_processing_interrupted()
@@ -431,10 +443,7 @@ def _run_fixed(
     embedding_cache: dict[int, list] = {}
     ref_emb, app = None, None
     anchor_count = 0
-    should_identify = _should_use_identity(
-        detections, identity_reference, identity_track
-    )
-    if should_identify:
+    if _should_use_identity(detections, identity_reference, identity_track):
         try:
             app = module._face_recogniser()
             if identity_reference is not None:
@@ -482,8 +491,8 @@ def _run_fixed(
     else:
         track, track_stats = geometric_track, geometric_stats
 
-    cx = np.zeros(B, dtype=np.float64)
-    cy = np.zeros(B, dtype=np.float64)
+    detected_cx = np.zeros(B, dtype=np.float64)
+    detected_cy = np.zeros(B, dtype=np.float64)
     face_h_raw = np.zeros(B, dtype=np.float64)
     face_w_raw = np.zeros(B, dtype=np.float64)
     valid = np.zeros(B, dtype=bool)
@@ -492,20 +501,24 @@ def _run_fixed(
         if box is None:
             continue
         bx, by, bh, bw = _box_state(box)
-        cx[i], cy[i], face_h_raw[i], face_w_raw[i] = bx, by, bh, bw
+        detected_cx[i], detected_cy[i] = bx, by
+        face_h_raw[i], face_w_raw[i] = bh, bw
         valid[i] = True
 
     found = int(valid.sum())
     if found == 0:
+        # Keep the exact prefix consumed by the existing no-face passthrough policy.
         raise ValueError(
             "No face detected in any frame. Lower `confidence`, or this clip has no "
             "usable face and should be skipped."
         )
 
-    # Body fallback follows the expected tracked head instead of the largest body.
+    # Body fallback follows the expected tracked head rather than the largest person.
     face_h_seed = module._interp_gaps(face_h_raw, valid)
-    expected_cx = module._interp_gaps(cx, valid)
-    expected_cy = module._interp_gaps(cy, valid)
+    expected_cx = module._interp_gaps(detected_cx, valid)
+    expected_cy = module._interp_gaps(detected_cy, valid)
+    fallback_cx = detected_cx.copy()
+    fallback_cy = detected_cy.copy()
     if fallback_detector != "none" and (~valid).any():
         try:
             body_model = module._load_detector(fallback_detector)
@@ -523,9 +536,7 @@ def _run_fixed(
                     else [0] * len(body_boxes)
                 )
                 people = [
-                    q
-                    for q, cls_id in zip(body_boxes, classes)
-                    if int(cls_id) == 0
+                    q for q, cls_id in zip(body_boxes, classes) if int(cls_id) == 0
                 ] or body_boxes
                 person = _choose_body_for_track(
                     people,
@@ -534,8 +545,8 @@ def _run_fixed(
                     face_h=float(face_h_seed[i]),
                     head_frac=float(fallback_head_frac),
                 )
-                cx[i] = 0.5 * (float(person[0]) + float(person[2]))
-                cy[i] = float(person[1]) + float(fallback_head_frac) * max(
+                fallback_cx[i] = 0.5 * (float(person[0]) + float(person[2]))
+                fallback_cy[i] = float(person[1]) + float(fallback_head_frac) * max(
                     float(face_h_seed[i]), 8.0
                 )
                 via_body[i] = True
@@ -543,22 +554,31 @@ def _run_fixed(
             print(f"[H3FaceRefine] body fallback '{fallback_detector}' failed: {exc}")
 
     known = valid | via_body
-    raw_cx = module._interp_gaps(cx, known)
-    raw_cy = module._interp_gaps(cy, known)
+    raw_cx = module._interp_gaps(fallback_cx, known)
+    raw_cy = module._interp_gaps(fallback_cy, known)
     raw_face_h = module._interp_gaps(face_h_raw, valid)
     raw_face_w = module._interp_gaps(face_w_raw, valid)
 
+    # Crop centre: heavily smoothed for stable H3 context, then bounded against real motion.
     smooth_cx = module._smooth(raw_cx, smooth_window, smooth_method)
     smooth_cy = module._smooth(raw_cy, smooth_window, smooth_method)
-    cx, cy, max_lag_before, max_lag_after = _bound_center_lag(
-        raw_cx, raw_cy, smooth_cx, smooth_cy, raw_face_h
-    )
-    face_h = module._smooth(raw_face_h, size_smooth_window, smooth_method)
-    face_w = module._smooth(raw_face_w, size_smooth_window, smooth_method)
+    (
+        crop_cx,
+        crop_cy,
+        face_cx,
+        face_cy,
+        max_lag_before,
+        max_lag_after,
+    ) = _bound_center_lag(raw_cx, raw_cy, smooth_cx, smooth_cy, raw_face_h)
 
-    # Crop-size policy is not face-mask geometry. max_of_clip may make every crop the
-    # same size, but must not inflate the actual face rectangle on smaller-face frames.
-    crop_face_h = face_h.copy()
+    # Face-region geometry: responsive median-3 trajectory. This is deliberately separate
+    # from crop smoothing: a stable crop may trail slightly, while the mask must remain on
+    # the actual face *inside* that crop. Median-3 removes isolated detector impulses.
+    mask_face_h = np.maximum(_median3(raw_face_h), 1.0)
+    mask_face_w = np.maximum(_median3(raw_face_w), 1.0)
+
+    # Crop size may stay more heavily smoothed because breathing changes resample scale.
+    crop_face_h = module._smooth(raw_face_h, size_smooth_window, smooth_method)
     if size_mode == "max_of_clip":
         crop_face_h[:] = crop_face_h.max()
 
@@ -566,8 +586,8 @@ def _run_fixed(
         return float(np.abs(np.diff(values)).mean()) if len(values) > 1 else 0.0
 
     jit_before = (_jit(raw_cx) + _jit(raw_cy)) * 0.5
-    jit_after = (_jit(cx) + _jit(cy)) * 0.5
-    size_before, size_after = _jit(raw_face_h), _jit(face_h)
+    jit_after = (_jit(crop_cx) + _jit(crop_cy)) * 0.5
+    size_before, size_after = _jit(raw_face_h), _jit(crop_face_h)
 
     if canvas_mode != "manual":
         need = float(min(crop_face_h.max() * crop_factor, H))
@@ -597,8 +617,8 @@ def _run_fixed(
             bw, bh = float(W), float(W) / aspect
         if bh > H:
             bh, bw = float(H), float(H) * aspect
-        x = min(max(float(cx[i]) - bw * 0.5, 0.0), max(0.0, W - bw))
-        y = min(max(float(cy[i]) - bh * 0.5, 0.0), max(0.0, H - bh))
+        x = min(max(float(crop_cx[i]) - bw * 0.5, 0.0), max(0.0, W - bw))
+        y = min(max(float(crop_cy[i]) - bh * 0.5, 0.0), max(0.0, H - bh))
         box = (float(x), float(y), float(bw), float(bh))
         boxes.append(box)
         crops[i : i + 1] = module._affine_crop(
@@ -642,12 +662,15 @@ def _run_fixed(
         runs.append(current)
     longest_gap = max(runs) if runs else 0
 
+    # This is the key placement invariant: face geometry is mapped from its responsive
+    # source-space position through the *actual* crop box. It is not assumed to be at the
+    # crop centre, so both smoothing displacement and frame-edge clamping are represented.
     face_rects = [
         _face_rect_in_canvas(
-            float(cx[i]),
-            float(cy[i]),
-            float(face_w[i]),
-            float(face_h[i]),
+            float(face_cx[i]),
+            float(face_cy[i]),
+            float(mask_face_w[i]),
+            float(mask_face_h[i]),
             boxes[i],
             int(canvas_width),
             int(canvas_height),
@@ -656,10 +679,10 @@ def _run_fixed(
     ]
     source_face_rects = [
         (
-            float(cx[i] - 0.5 * face_w[i]),
-            float(cy[i] - 0.5 * face_h[i]),
-            float(face_w[i]),
-            float(face_h[i]),
+            float(face_cx[i] - 0.5 * mask_face_w[i]),
+            float(face_cy[i] - 0.5 * mask_face_h[i]),
+            float(mask_face_w[i]),
+            float(mask_face_h[i]),
         )
         for i in range(B)
     ]
@@ -675,6 +698,7 @@ def _run_fixed(
         "face_rect_source": source_face_rects,
         "crop_factor": float(crop_factor),
         "tracking_geometry": "configured_detector_only",
+        "face_geometry": "responsive_median3",
     }
 
     gapwarn = ""
@@ -682,7 +706,7 @@ def _run_fixed(
         gapwarn = (
             f"\n!! longest dropout is {longest_gap} frames "
             f"({longest_gap / 24.0:.1f}s). The crop is interpolated through the gap; "
-            "detector weighting keeps refinement faded out until a real face returns."
+            "detector gating prevents sampler-2 refinement on missing-face frames."
         )
 
     n_down = sum(1 for mag in mags if mag < 1.0)
@@ -717,8 +741,8 @@ def _run_fixed(
         f"frames={B}  face={found} ({found / B * 100:.0f}%)  "
         f"body-fallback={int(via_body.sum())}  "
         f"interpolated={B - int(known.sum())}\n"
-        f"face height  min={face_h.min():.0f}px  mean={face_h.mean():.0f}px  "
-        f"max={face_h.max():.0f}px\n"
+        f"face height  min={mask_face_h.min():.0f}px  "
+        f"mean={mask_face_h.mean():.0f}px  max={mask_face_h.max():.0f}px\n"
         f"face fills   ~{100.0 / crop_factor:.0f}% of every crop "
         f"(crop_factor={crop_factor})\n"
         f"crop box     min={min(box[3] for box in boxes):.0f}px  "
@@ -726,13 +750,14 @@ def _run_fixed(
         f"magnification into {canvas_width}x{canvas_height}: "
         f"min={min(mags):.2f}x  mean={sum(mags) / len(mags):.2f}x  "
         f"max={max(mags):.2f}x\n"
-        f"jitter ({smooth_method}) centre {jit_before:.2f} -> {jit_after:.2f} px/frame"
-        f"   size {size_before:.2f} -> {size_after:.2f} px/frame\n"
-        f"centre lag guard: max responsive-to-smoothed "
+        f"jitter ({smooth_method}) crop centre {jit_before:.2f} -> "
+        f"{jit_after:.2f} px/frame   crop size {size_before:.2f} -> "
+        f"{size_after:.2f} px/frame\n"
+        f"crop lag guard: max responsive-to-smoothed "
         f"{max_lag_before:.1f}px -> {max_lag_after:.1f}px "
         f"(<= {_CENTER_LAG_FRACTION * 100:.0f}% face height)\n"
-        f"box movement {box_jit:.2f} px/frame; "
-        "face rect mapped through actual clamped crop\n"
+        f"box movement {box_jit:.2f} px/frame; responsive face geometry mapped "
+        "inside actual clamped crop\n"
         f"dropout runs: {len(runs)}  longest={longest_gap} frames "
         f"({longest_gap / 24.0:.1f}s at 24fps)"
         f"{gapwarn}{warn}"
@@ -808,8 +833,8 @@ def install_tracking_fixes(node_class_mappings: Mapping[str, type]) -> None:
     cls.run = run
     cls.DESCRIPTION = (
         str(getattr(cls, "DESCRIPTION", "")).rstrip()
-        + " Motion-predicted association, identity-stable geometry, bounded smoothing "
-        "lag, and crop-aware face-mask placement are applied automatically."
+        + " Motion-predicted association, identity-stable geometry, bounded crop lag, "
+        "and responsive crop-aware face-mask placement are applied automatically."
     ).strip()
     setattr(cls, _INSTALL_MARKER, True)
 
