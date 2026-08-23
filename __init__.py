@@ -16,6 +16,37 @@ The crop must be PER FRAME. A single fixed crop degenerates to a wide shot on a
 push-in, which hands H3 exactly the small face it fails on.
 """
 
-from .nodes import NODE_CLASS_MAPPINGS, NODE_DISPLAY_NAME_MAPPINGS
+if __package__:
+    from .nodes import NODE_CLASS_MAPPINGS, NODE_DISPLAY_NAME_MAPPINGS
+    from .quality_fixes import install_quality_fixes
+    from .quality_fixes_v2 import install_quality_fixes_v2
+else:  # pytest/importlib loading this custom-node root as a standalone module
+    import importlib.util
+    import sys
+    from pathlib import Path
+
+    _root = Path(__file__).resolve().parent
+
+    def _load_sibling(name: str, filename: str):
+        spec = importlib.util.spec_from_file_location(name, _root / filename)
+        if spec is None or spec.loader is None:
+            raise ImportError(f"could not load sibling FaceRefine module {filename}")
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = module
+        spec.loader.exec_module(module)
+        return module
+
+    _nodes_module = _load_sibling("h3_face_refine_nodes", "nodes.py")
+    NODE_CLASS_MAPPINGS = _nodes_module.NODE_CLASS_MAPPINGS
+    NODE_DISPLAY_NAME_MAPPINGS = _nodes_module.NODE_DISPLAY_NAME_MAPPINGS
+    install_quality_fixes = _load_sibling(
+        "h3_face_refine_quality_fixes", "quality_fixes.py"
+    ).install_quality_fixes
+    install_quality_fixes_v2 = _load_sibling(
+        "h3_face_refine_quality_fixes_v2", "quality_fixes_v2.py"
+    ).install_quality_fixes_v2
+
+install_quality_fixes(NODE_CLASS_MAPPINGS)
+install_quality_fixes_v2(NODE_CLASS_MAPPINGS)
 
 __all__ = ["NODE_CLASS_MAPPINGS", "NODE_DISPLAY_NAME_MAPPINGS"]

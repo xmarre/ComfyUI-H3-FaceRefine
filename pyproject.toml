@@ -14,10 +14,8 @@ dependencies = [
     "scipy",
     "insightface",
 ]
-# onnxruntime is deliberately NOT pinned here. insightface pulls the runtime it needs,
-# and declaring onnxruntime-gpu alongside an existing onnxruntime makes the CPU-only
-# package shadow it - CUDAExecutionProvider then disappears and identity matching
-# silently drops to CPU. Users who want GPU should install one variant, not both.
+# CUDA: replace CPU `onnxruntime` with a compatible `onnxruntime-gpu` build and
+# verify CUDAExecutionProvider.
 
 [project.urls]
 Repository = "https://github.com/Carasibana/ComfyUI-H3-FaceRefine"

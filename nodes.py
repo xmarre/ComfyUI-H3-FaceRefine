@@ -1332,6 +1332,24 @@ class H3FaceTransformInfo:
         return (txt,)
 
 
+if __package__:
+    from .continuum_refine import H3ContinuumFaceRefine
+else:  # standalone test import of the custom-node root
+    import importlib.util
+    import sys
+    from pathlib import Path
+
+    _continuum_spec = importlib.util.spec_from_file_location(
+        "h3_face_refine_continuum", Path(__file__).with_name("continuum_refine.py")
+    )
+    if _continuum_spec is None or _continuum_spec.loader is None:
+        raise ImportError("could not load the sibling continuum_refine.py")
+    _continuum_module = importlib.util.module_from_spec(_continuum_spec)
+    sys.modules[_continuum_spec.name] = _continuum_module
+    _continuum_spec.loader.exec_module(_continuum_module)
+    H3ContinuumFaceRefine = _continuum_module.H3ContinuumFaceRefine
+
+
 NODE_CLASS_MAPPINGS = {
     "H3FaceTrackCrop": H3FaceTrackCrop,
     "H3FaceStitch": H3FaceStitch,
@@ -1339,6 +1357,7 @@ NODE_CLASS_MAPPINGS = {
     "H3PerFrameDenoise": H3PerFrameDenoise,
     "H3FaceMaskSAM": H3FaceMaskSAM,
     "H3FaceTransformInfo": H3FaceTransformInfo,
+    "H3ContinuumFaceRefine": H3ContinuumFaceRefine,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
@@ -1348,4 +1367,5 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "H3PerFrameDenoise": "H3 Per-Frame Denoise",
     "H3FaceMaskSAM": "H3 Face Mask (SAM)",
     "H3FaceTransformInfo": "H3 Face Transform Info",
+    "H3ContinuumFaceRefine": "H3 Continuum Face Refine",
 }
