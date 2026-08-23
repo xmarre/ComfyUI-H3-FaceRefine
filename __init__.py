@@ -20,6 +20,7 @@ if __package__:
     from .nodes import NODE_CLASS_MAPPINGS, NODE_DISPLAY_NAME_MAPPINGS
     from .quality_fixes import install_quality_fixes
     from .quality_fixes_v2 import install_quality_fixes_v2
+    from .no_face_passthrough import install_no_face_passthrough
 else:  # pytest/importlib loading this custom-node root as a standalone module
     import importlib.util
     import sys
@@ -45,8 +46,12 @@ else:  # pytest/importlib loading this custom-node root as a standalone module
     install_quality_fixes_v2 = _load_sibling(
         "h3_face_refine_quality_fixes_v2", "quality_fixes_v2.py"
     ).install_quality_fixes_v2
+    install_no_face_passthrough = _load_sibling(
+        "h3_face_refine_no_face_passthrough", "no_face_passthrough.py"
+    ).install_no_face_passthrough
 
 install_quality_fixes(NODE_CLASS_MAPPINGS)
 install_quality_fixes_v2(NODE_CLASS_MAPPINGS)
+install_no_face_passthrough(NODE_CLASS_MAPPINGS)
 
 __all__ = ["NODE_CLASS_MAPPINGS", "NODE_DISPLAY_NAME_MAPPINGS"]
