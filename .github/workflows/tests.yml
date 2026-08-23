@@ -95,6 +95,7 @@ jobs:
               prefix + "continuum_refine.py",
               prefix + "quality_fixes.py",
               prefix + "quality_fixes_v2.py",
+              prefix + "no_face_passthrough.py",
               prefix + "docs/H3_CONTINUUM_WORKFLOW_FRAGMENT.md",
           }
           with zipfile.ZipFile(os.environ["ARCHIVE"]) as archive:
