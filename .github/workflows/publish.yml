@@ -1,26 +1,86 @@
-name: Publish to Comfy Registry
+name: Publish to Comfy registry
 
 on:
-  workflow_dispatch:
-  push:
-    branches:
-      - main
-    paths:
-      # re-publishes only when the version (or other metadata) actually changes
-      - "pyproject.toml"
+  workflow_run:
+    workflows: [tests]
+    types: [completed]
 
 permissions:
   contents: read
+  issues: write
+
+concurrency:
+  group: comfy-registry-publish-${{ github.event.workflow_run.head_sha }}
+  cancel-in-progress: false
 
 jobs:
   publish-node:
-    name: Publish custom node to the registry
+    name: Publish tested custom node to registry
+    if: >-
+      github.repository_owner == 'xmarre' &&
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_branch == 'main'
     runs-on: ubuntu-latest
     steps:
-      - name: Check out code
-        uses: actions/checkout@v4
+      - name: Check out tested commit
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+          fetch-depth: 2
+          ref: ${{ github.event.workflow_run.head_sha }}
+
+      - name: Set up validation Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.12"
+
+      - name: Install version validation dependency
+        run: python -m pip install --disable-pip-version-check 'packaging==25.0'
+
+      - name: Detect strictly increasing tested version bump
+        id: version
+        shell: bash
+        env:
+          RELEASE_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          current="$(python -c 'import pathlib, tomllib; print(tomllib.loads(pathlib.Path("pyproject.toml").read_text())["project"]["version"])')"
+          parent="$(git rev-parse "${RELEASE_SHA}^")"
+          previous="$(git show "${parent}:pyproject.toml" | python -c 'import sys, tomllib; print(tomllib.loads(sys.stdin.read())["project"]["version"])')"
+
+          relation="$(CURRENT="${current}" PREVIOUS="${previous}" python - <<'PY'
+          import os
+          from packaging.version import InvalidVersion, Version
+
+          try:
+              current = Version(os.environ["CURRENT"])
+              previous = Version(os.environ["PREVIOUS"])
+          except InvalidVersion as exc:
+              raise SystemExit(f"Invalid PEP 440 project version: {exc}") from exc
+          if len(current.release) != 3 or len(previous.release) != 3:
+              raise SystemExit("Project versions must have exactly three release components")
+          print("greater" if current > previous else "equal" if current == previous else "lower")
+          PY
+          )"
+
+          echo "version=${current}" >> "${GITHUB_OUTPUT}"
+          case "${relation}" in
+            greater)
+              echo "publish=true" >> "${GITHUB_OUTPUT}"
+              echo "Validated tested version bump: ${previous} -> ${current}."
+              ;;
+            equal)
+              echo "publish=false" >> "${GITHUB_OUTPUT}"
+              echo "Project version is unchanged (${current}); no registry publication requested."
+              ;;
+            lower)
+              echo "Refusing registry publication for version downgrade: ${previous} -> ${current}." >&2
+              exit 1
+              ;;
+          esac
 
       - name: Publish custom node
-        uses: Comfy-Org/publish-node-action@main
+        if: steps.version.outputs.publish == 'true'
+        uses: Comfy-Org/publish-node-action@0eb6cd742945443bee7f79eeddd4f732780029a1 # v1
         with:
           personal_access_token: ${{ secrets.REGISTRY_ACCESS_TOKEN }}

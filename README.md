@@ -42,7 +42,7 @@ or the refined face boils.
 Clone into `ComfyUI/custom_nodes/`:
 
 ```bash
-git clone https://github.com/Carasibana/ComfyUI-H3-FaceRefine.git
+git clone https://github.com/xmarre/ComfyUI-H3-FaceRefine.git
 ```
 
 Restart ComfyUI. The nodes appear under **MiniMax H3/Face Refine**.
