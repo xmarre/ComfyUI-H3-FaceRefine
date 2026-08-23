@@ -22,6 +22,7 @@ if __package__:
     from .quality_fixes_v2 import install_quality_fixes_v2
     from .tracking_fixes import install_tracking_fixes
     from .tracking_performance import install_tracking_performance_fixes
+    from .tracking_runtime import install_tracking_runtime_fixes
     from .no_face_passthrough import install_no_face_passthrough
 else:  # pytest/importlib loading this custom-node root as a standalone module
     import importlib.util
@@ -54,6 +55,9 @@ else:  # pytest/importlib loading this custom-node root as a standalone module
     install_tracking_performance_fixes = _load_sibling(
         "h3_face_refine_tracking_performance", "tracking_performance.py"
     ).install_tracking_performance_fixes
+    install_tracking_runtime_fixes = _load_sibling(
+        "h3_face_refine_tracking_runtime", "tracking_runtime.py"
+    ).install_tracking_runtime_fixes
     install_no_face_passthrough = _load_sibling(
         "h3_face_refine_no_face_passthrough", "no_face_passthrough.py"
     ).install_no_face_passthrough
@@ -62,6 +66,7 @@ install_quality_fixes(NODE_CLASS_MAPPINGS)
 install_quality_fixes_v2(NODE_CLASS_MAPPINGS)
 install_tracking_fixes(NODE_CLASS_MAPPINGS)
 install_tracking_performance_fixes(NODE_CLASS_MAPPINGS)
+install_tracking_runtime_fixes(NODE_CLASS_MAPPINGS)
 install_no_face_passthrough(NODE_CLASS_MAPPINGS)
 
 __all__ = ["NODE_CLASS_MAPPINGS", "NODE_DISPLAY_NAME_MAPPINGS"]
