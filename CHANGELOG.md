@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+## 1.1.1
+
+- Fixed no-face clips aborting the entire workflow after expensive upstream generation. `H3 Face Track + Crop` now emits an explicit no-face passthrough transform instead of throwing when no human face is detected in any frame.
+- `H3 Continuum Face Refine` recognises that passthrough contract before any physical-group validation, VAE work, or sampler-2 refinement and returns the original timeline unchanged.
+- `H3 Face Stitch Back` returns the untouched base video for no-face timelines; SAM masks, per-frame denoise, and transform diagnostics also become cheap no-ops instead of inventing fallback face regions or failing.
+- The passthrough only converts the deliberate all-frames-missed condition. Detector/configuration/topology errors remain hard failures so genuine problems are not hidden.
+- Added regression coverage for the full no-face chain, auxiliary no-op stages, unrelated error propagation, and installer idempotence.
+
 ## 1.1.0
 
 - Added exact H3 Continuum V3.4 sampler-2 integration using Continuum's captured per-physical-sample MODEL, positive CONDITIONING, latent topology, inherited Native Masked protection, and assembly plan instead of rebuilding a second ReferenceToVideo path.
