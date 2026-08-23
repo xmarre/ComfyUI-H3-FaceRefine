@@ -132,23 +132,42 @@ def test_face_rect_maps_actual_offset_inside_top_clamped_crop():
     assert math.isclose(top, 0.0, abs_tol=1e-6)
     assert math.isclose(width, 153.6, abs_tol=1e-6)
     assert math.isclose(height, 204.8, abs_tol=1e-6)
-    # Old behaviour forced the face rectangle to canvas centre.
     assert not math.isclose(top, 512 * 0.5 - height * 0.5, abs_tol=1e-6)
 
 
-def test_center_lag_guard_bounds_fast_motion_error_by_face_size():
+def test_face_rect_keeps_responsive_face_offset_inside_lagging_crop():
+    # A stabilized crop may deliberately trail the face by a small bounded amount.
+    # The refine region must move inside that crop rather than staying at canvas centre.
+    rect = MODULE._face_rect_in_canvas(
+        face_cx=200,
+        face_cy=100,
+        face_w=60,
+        face_h=80,
+        crop_box=(88, 0, 200, 200),  # crop centre x=188, face centre x=200
+        canvas_width=512,
+        canvas_height=512,
+    )
+    left, _top, width, _height = rect
+    centre = left + width * 0.5
+    assert math.isclose(centre, 286.72, abs_tol=1e-6)
+    assert not math.isclose(centre, 256.0, abs_tol=1e-6)
+
+
+def test_center_lag_guard_bounds_fast_motion_and_returns_responsive_geometry():
     raw_x = np.asarray([0.0, 0.0, 100.0, 200.0])
     raw_y = np.zeros_like(raw_x)
     smooth_x = np.asarray([0.0, 20.0, 60.0, 130.0])
     smooth_y = np.zeros_like(raw_x)
     face_h = np.full_like(raw_x, 100.0)
-    out_x, out_y, before, after = MODULE._bound_center_lag(
+    out_x, out_y, face_x, face_y, before, after = MODULE._bound_center_lag(
         raw_x, raw_y, smooth_x, smooth_y, face_h
     )
     assert before == 70.0
     assert after <= 12.0 + 1e-9
     assert np.allclose(out_y, 0.0)
     assert math.isclose(out_x[-1], 188.0, abs_tol=1e-9)
+    assert np.array_equal(face_x, np.asarray([0.0, 0.0, 100.0, 200.0]))
+    assert np.allclose(face_y, 0.0)
 
 
 def test_center_lag_guard_does_not_follow_isolated_detector_spike():
@@ -157,10 +176,11 @@ def test_center_lag_guard_does_not_follow_isolated_detector_spike():
     smooth_x = np.zeros_like(raw_x)
     smooth_y = np.zeros_like(raw_x)
     face_h = np.full_like(raw_x, 100.0)
-    out_x, _out_y, _before, after = MODULE._bound_center_lag(
+    out_x, _out_y, face_x, _face_y, _before, after = MODULE._bound_center_lag(
         raw_x, raw_y, smooth_x, smooth_y, face_h
     )
     assert np.allclose(out_x, 0.0)
+    assert np.allclose(face_x, 0.0)
     assert after == 0.0
 
 
