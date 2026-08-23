@@ -170,8 +170,13 @@ def test_negative_tracklet_geometry_change_forces_probe_before_refresh_stride():
         3: [(changed, np.asarray([1.0, 0.0], dtype=np.float32))],
     }
 
-    module, track, _stats = _run(detections, embeddings)
+    module, track, stats = _run(detections, embeddings)
 
-    assert 2 not in module.calls
-    assert 3 in module.calls
+    # Forward tracking skips frame 2, sees the material geometry change at frame 3 and
+    # probes immediately. The successful frame-3 probe then performs the bounded offline
+    # backfill, which is why frame 2 appears later in the call log.
+    assert module.calls[:3] == [0, 1, 3]
+    assert module.calls.index(3) < module.calls.index(2)
+    assert stats["identity_skipped"] >= 1
+    assert track[2] is None
     assert track[3] == tuple(float(v) for v in changed)
