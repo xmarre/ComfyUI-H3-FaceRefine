@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Fixed face tracking switching or drifting to the wrong person during fast motion, detector dropouts, and crowd transitions. Tracking now uses motion prediction with plausibility gating, rejects unsafe lone-face reacquisition, and enables identity handling when multiple faces appear anywhere in the clip rather than only on frame 0.
+- Kept the configured YOLO detector as the sole tracking-geometry source. InsightFace now identifies which YOLO box belongs to the subject without substituting its differently shaped bbox, eliminating detector-to-detector box jumps.
+- Fixed body fallback selecting the largest person instead of the tracked subject; fallback bodies are now associated to the expected tracked head position.
+- Split stabilized crop motion from responsive face-region geometry. A median-3 detector trajectory rejects isolated spikes; the crop centre is smoothed but bounded to within 12% of face height from real motion, while the refine/SAM region follows the responsive detector geometry inside the crop instead of inheriting crop lag.
+- Fixed refine-mask placement when crops are clamped to frame boundaries. Face rectangles are now mapped through the actual source-to-canvas crop transform, preserving both the face's motion offset inside a stabilized crop and edge-clamping offsets instead of forcing the region to canvas centre.
+- Separated face-mask geometry from `max_of_clip` crop sizing so constant crop size no longer inflates the actual face region on smaller-face frames.
+- Added regression coverage for velocity prediction, late crowd activation, lone-bystander rejection, YOLO/InsightFace geometry separation, body association, smoothing lag/spike handling, responsive face motion inside a stabilized crop, and clamped-crop face placement.
+
 ## 1.1.1
 
 - Fixed no-face clips aborting the entire workflow after expensive upstream generation. `H3 Face Track + Crop` now emits an explicit no-face passthrough transform instead of throwing when no human face is detected in any frame.
