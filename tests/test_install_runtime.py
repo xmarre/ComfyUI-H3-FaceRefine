@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 from pathlib import Path
+from types import SimpleNamespace
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -35,6 +36,23 @@ def test_cpu_host_is_left_unchanged():
         providers=["CPUExecutionProvider"],
         gpu_version=None,
     ) is False
+
+
+def test_cuda_host_probe_runs_in_child_interpreter(monkeypatch):
+    calls = []
+
+    def fake_run(args, **kwargs):
+        calls.append((args, kwargs))
+        return SimpleNamespace(returncode=0, stdout="1\n", stderr="")
+
+    monkeypatch.setattr(INSTALL.subprocess, "run", fake_run)
+
+    assert INSTALL._cuda_host() is True
+    assert len(calls) == 1
+    args, kwargs = calls[0]
+    assert args[:2] == [INSTALL.sys.executable, "-c"]
+    assert "import torch" in args[2]
+    assert kwargs["capture_output"] is True
 
 
 def test_gpu_repair_reinstalls_existing_gpu_version_last_without_uninstalling_cpu(monkeypatch):
@@ -80,7 +98,7 @@ def test_healthy_gpu_fast_path_does_not_import_cuda_host_probe(monkeypatch):
     )
 
     def should_not_run():
-        raise AssertionError("healthy startup should not import torch just to detect CUDA")
+        raise AssertionError("healthy startup should not probe PyTorch CUDA")
 
     monkeypatch.setattr(INSTALL, "_cuda_host", should_not_run)
     monkeypatch.setattr(
