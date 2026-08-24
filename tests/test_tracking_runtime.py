@@ -53,8 +53,8 @@ def test_new_multiface_run_gets_immediate_checkpoint_after_single_frame_gap():
     )
 
     assert crowded[0] is True
-    assert crowded[2] is True  # singleton transition safety is preserved
-    assert crowded[3] is True  # a new crowd run is checked immediately
+    assert crowded[2] is True
+    assert crowded[3] is True
 
 
 def test_expanded_singleton_transition_guard_is_preserved():
@@ -80,8 +80,6 @@ def test_expanded_singleton_transition_guard_is_preserved():
 
 
 def test_identity_provider_state_does_not_require_onnxruntime(monkeypatch):
-    # The module is intentionally optional in CPU-only CI.  A failed import/query must
-    # remain diagnostic rather than making FaceRefine itself unloadable.
     import builtins
 
     real_import = builtins.__import__
@@ -97,3 +95,18 @@ def test_identity_provider_state_does_not_require_onnxruntime(monkeypatch):
     assert backend == "unavailable"
     assert providers == ()
     assert "onnxruntime unavailable" in error
+
+
+def test_cpu_identity_is_rejected_only_on_cuda_host_without_explicit_override():
+    assert RUNTIME._cpu_backend_is_misconfigured(
+        "cpu", cuda_host=True, allow_cpu=False
+    ) is True
+    assert RUNTIME._cpu_backend_is_misconfigured(
+        "cpu", cuda_host=False, allow_cpu=False
+    ) is False
+    assert RUNTIME._cpu_backend_is_misconfigured(
+        "cpu", cuda_host=True, allow_cpu=True
+    ) is False
+    assert RUNTIME._cpu_backend_is_misconfigured(
+        "cuda", cuda_host=True, allow_cpu=False
+    ) is False
