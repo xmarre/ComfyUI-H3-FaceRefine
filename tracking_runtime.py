@@ -7,10 +7,10 @@ Two independent costs matter for identity tracking:
   expanded crowd window, even when motion association was unambiguous.
 
 This layer keeps the hard safety gates for ambiguous motion, dropouts, and crowd
-transitions. During a stable multi-face run it turns the broad ``crowded`` flag
+transitions.  During a stable multi-face run it turns the broad ``crowded`` flag
 into periodic identity checkpoints; ambiguity still forces an immediate check.
-On a CUDA ComfyUI host, identity matching also refuses an accidental CPU-only ORT
-backend instead of silently turning one tracking pass into tens of seconds.
+It also reports the actual ONNX Runtime provider. On CUDA ComfyUI hosts, an
+accidental CPU-only identity backend is rejected before expensive FaceAnalysis work.
 """
 
 from __future__ import annotations
@@ -74,7 +74,15 @@ def _checkpointed_crowded_frames(
     radius: int = 2,
     stride: int = _CROWD_CHECKPOINT_STRIDE,
 ):
-    """Preserve transition safety while sparsifying stable multi-face checkpoints."""
+    """Preserve transition safety while sparsifying stable multi-face checkpoints.
+
+    ``tracking_performance`` already forces identity for ambiguous candidates,
+    implausible motion, and tracking gaps.  The only redundant part is the broad
+    ``or crowded[i]`` clause on every non-ambiguous multi-face frame.  Singleton
+    frames in the expanded crowd radius are intentionally kept True because that
+    is the guard which prevents a disappearing target from being replaced by the
+    one bystander left on screen.
+    """
     expanded = list(original_crowded_frames(detections, radius=radius))
     if not expanded:
         return expanded
@@ -87,11 +95,15 @@ def _checkpointed_crowded_frames(
     for i, boxes in enumerate(detections):
         is_multi = len(boxes) > 1
         if not is_multi:
+            # Keep the existing +/- radius transition guard for lone detections.
             out[i] = bool(expanded[i])
             in_multi_run = False
             last_checkpoint = None
             continue
 
+        # A newly-entered crowd is checked immediately, then periodically while the
+        # multi-face geometry remains stable.  Any ambiguity between checkpoints is
+        # still handled by the association code and forces identity immediately.
         if (
             not in_multi_run
             or last_checkpoint is None
@@ -105,7 +117,7 @@ def _checkpointed_crowded_frames(
 
 
 def _validate_identity_backend() -> None:
-    """Reject accidental CPU fallback on a CUDA host before expensive FaceAnalysis work."""
+    """Refuse accidental CPU fallback on a CUDA host before FaceAnalysis construction."""
     global _CPU_PROVIDER_WARNING_EMITTED
 
     backend, providers, error = _identity_provider_state()
@@ -150,6 +162,9 @@ def install_tracking_runtime_fixes(node_class_mappings: Mapping[str, type]) -> N
     if getattr(cls, _INSTALL_MARKER, False):
         return
 
+    # tracking_performance wraps tracking_fixes with functools.wraps.  Its wrapped
+    # function therefore gives us the tracking_fixes module globals used by the
+    # sparse association closure installed in the previous layer.
     performance_run = cls.run
     tracking_run = getattr(performance_run, "__wrapped__", None)
     tracking = getattr(tracking_run, "__globals__", None)
@@ -172,6 +187,9 @@ def install_tracking_runtime_fixes(node_class_mappings: Mapping[str, type]) -> N
         checkpointed_crowded_frames._h3_checkpointed_crowd_policy = True
         tracking["_crowded_frames"] = checkpointed_crowded_frames
 
+    # Validate at the moment InsightFace is actually requested, before the expensive
+    # FaceAnalysis construction/inference path starts. Genuine CPU hosts keep the old
+    # warning-only behavior; CUDA hosts reject a CPU-only backend unless explicitly allowed.
     node_module = sys.modules.get(cls.__module__)
     if node_module is None or not hasattr(node_module, "_face_recogniser"):
         raise ImportError(
@@ -188,6 +206,8 @@ def install_tracking_runtime_fixes(node_class_mappings: Mapping[str, type]) -> N
         setattr(face_recogniser, _RECOGNISER_MARKER, True)
         node_module._face_recogniser = face_recogniser
 
+    # Add the provider directly to the node report so future performance logs do not
+    # require finding ONNX Runtime's initialization warning hundreds of lines earlier.
     original_run = cls.run
 
     @wraps(original_run)
