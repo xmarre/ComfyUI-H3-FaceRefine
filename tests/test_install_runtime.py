@@ -22,15 +22,34 @@ def test_cuda_provider_is_healthy_even_if_cpu_distribution_metadata_exists():
     assert INSTALL._needs_gpu_repair(
         cuda_host=True,
         providers=["CUDAExecutionProvider", "CPUExecutionProvider"],
-        gpu_version=FAKE_ORT_VERSION,
     ) is False
+
+
+def test_cuda_provider_is_source_of_truth_even_without_gpu_dist_metadata(monkeypatch):
+    monkeypatch.setattr(
+        INSTALL,
+        "_fresh_providers",
+        lambda: (["CUDAExecutionProvider", "CPUExecutionProvider"], None),
+    )
+    monkeypatch.setattr(INSTALL, "_dist_version", lambda _name: None)
+
+    def should_not_run():
+        raise AssertionError("healthy unmanaged CUDA ORT must not be replaced")
+
+    monkeypatch.setattr(INSTALL, "_cuda_host", should_not_run)
+    monkeypatch.setattr(
+        INSTALL,
+        "_run_pip",
+        lambda *args: (_ for _ in ()).throw(AssertionError("pip must not run")),
+    )
+
+    assert INSTALL.main() == 0
 
 
 def test_missing_cuda_provider_requires_repair_on_cuda_host():
     assert INSTALL._needs_gpu_repair(
         cuda_host=True,
         providers=["AzureExecutionProvider", "CPUExecutionProvider"],
-        gpu_version=FAKE_ORT_VERSION,
     ) is True
 
 
@@ -38,7 +57,6 @@ def test_cpu_host_is_left_unchanged():
     assert INSTALL._needs_gpu_repair(
         cuda_host=False,
         providers=["CPUExecutionProvider"],
-        gpu_version=None,
     ) is False
 
 
@@ -86,6 +104,30 @@ def test_gpu_repair_reinstalls_detected_gpu_version_last_without_uninstalling_cp
             "--no-deps",
             f"onnxruntime-gpu=={FAKE_ORT_VERSION}",
         )
+    ]
+
+
+def test_missing_gpu_dist_metadata_installs_unpinned_gpu_package(monkeypatch):
+    monkeypatch.setattr(INSTALL, "_cuda_host", lambda: True)
+    probes = iter(
+        [
+            (["CPUExecutionProvider"], None),
+            (["CUDAExecutionProvider", "CPUExecutionProvider"], None),
+        ]
+    )
+    monkeypatch.setattr(INSTALL, "_fresh_providers", lambda: next(probes))
+    monkeypatch.setattr(
+        INSTALL,
+        "_dist_version",
+        lambda name: FAKE_ORT_VERSION if name == INSTALL.CPU_DIST else None,
+    )
+
+    commands = []
+    monkeypatch.setattr(INSTALL, "_run_pip", lambda *args: commands.append(args))
+
+    assert INSTALL.main() == 0
+    assert commands == [
+        ("install", "--force-reinstall", "--no-deps", "onnxruntime-gpu")
     ]
 
 
