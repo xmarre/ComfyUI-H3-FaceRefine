@@ -3,16 +3,18 @@ from __future__ import annotations
 """Repair InsightFace's ONNX Runtime backend on CUDA ComfyUI hosts.
 
 Several ComfyUI nodes (including InsightFace consumers and WD14 Tagger) legitimately
-declare the distribution named ``onnxruntime``.  Pip treats that CPU distribution and
+declare the distribution named ``onnxruntime``. Pip treats that CPU distribution and
 ``onnxruntime-gpu`` as separate projects even though both install the same import
-package.  Dependency reconciliation can therefore overwrite a working GPU module with
+package. Dependency reconciliation can therefore overwrite a working GPU module with
 CPU files.
 
-The durable invariant is not "CPU metadata must be absent".  Other installed nodes may
-need that metadata to remain satisfied.  Instead, when CUDA is available and the live
-module has lost CUDAExecutionProvider, reinstall the GPU distribution *last* and verify
-its provider set in a fresh interpreter.  ``prestartup_script.py`` runs this same check
-after Manager dependency reconciliation on every ComfyUI launch.
+The durable invariant is the live provider set, not pip ownership metadata. If the
+imported ONNX Runtime already exposes CUDAExecutionProvider, FaceRefine leaves it alone
+regardless of whether it came from pip, conda, or another package manager. If a CUDA
+ComfyUI host has lost that provider, reinstall the detected pip GPU distribution version
+last (or install an unpinned GPU distribution if none is registered), then verify in a
+fresh interpreter. ``prestartup_script.py`` runs this same check after Manager dependency
+reconciliation on every ComfyUI launch.
 """
 
 from importlib import metadata
@@ -66,15 +68,8 @@ def _fresh_providers() -> tuple[list[str], str | None]:
         return [], f"could not parse ONNX Runtime provider probe: {exc}"
 
 
-def _needs_gpu_repair(
-    *,
-    cuda_host: bool,
-    providers: list[str],
-    gpu_version: str | None,
-) -> bool:
-    if not cuda_host:
-        return False
-    return gpu_version is None or CUDA_PROVIDER not in providers
+def _needs_gpu_repair(*, cuda_host: bool, providers: list[str]) -> bool:
+    return bool(cuda_host) and CUDA_PROVIDER not in providers
 
 
 def _run_pip(*args: str) -> None:
@@ -83,20 +78,21 @@ def _run_pip(*args: str) -> None:
 
 def _gpu_install_args(gpu_version: str | None) -> tuple[str, ...]:
     requirement = GPU_DIST if gpu_version is None else f"{GPU_DIST}=={gpu_version}"
-    # Reinstall the GPU payload last.  Keeping plain onnxruntime's dist-info when some
+    # Reinstall the GPU payload last. Keeping plain onnxruntime's dist-info when some
     # other node requires it prevents Manager from reintroducing CPU files next launch.
     return ("install", "--force-reinstall", "--no-deps", requirement)
 
 
 def main() -> int:
-    # Fast healthy path: probing ORT is much cheaper than probing PyTorch CUDA during
-    # every startup. A verified GPU distribution/provider needs no further work.
+    # The provider is the source of truth. A healthy conda/custom ORT install must not be
+    # replaced merely because pip has no onnxruntime-gpu distribution metadata.
     providers, probe_error = _fresh_providers()
     gpu_version = _dist_version(GPU_DIST)
-    if gpu_version is not None and CUDA_PROVIDER in providers:
+    if CUDA_PROVIDER in providers:
+        source = gpu_version or "non-pip/unregistered"
         print(
             "[H3FaceRefine install] InsightFace ONNX Runtime GPU verified: "
-            f"providers={providers} onnxruntime-gpu={gpu_version}"
+            f"providers={providers} onnxruntime-gpu={source}"
         )
         return 0
 
@@ -104,14 +100,10 @@ def main() -> int:
         print("[H3FaceRefine install] non-CUDA host: leaving ONNX Runtime unchanged")
         return 0
 
-    cpu_version = _dist_version(CPU_DIST)
-    if not _needs_gpu_repair(
-        cuda_host=True,
-        providers=providers,
-        gpu_version=gpu_version,
-    ):
+    if not _needs_gpu_repair(cuda_host=True, providers=providers):
         return 0
 
+    cpu_version = _dist_version(CPU_DIST)
     print(
         "[H3FaceRefine install] repairing InsightFace ONNX Runtime GPU payload: "
         f"onnxruntime={cpu_version or 'absent'} "
