@@ -1,3 +1,5 @@
 ultralytics
 scipy
+# insightface declares CPU-only `onnxruntime`; install.py repairs that dependency on
+# CUDA hosts after ComfyUI-Manager finishes installing this file.
 insightface
