@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 from pathlib import Path
+from types import SimpleNamespace
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -12,35 +13,71 @@ assert SPEC is not None and SPEC.loader is not None
 INSTALL = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(INSTALL)
 
+# Deliberately non-release-looking PEP 440 fixture. Tests verify version propagation;
+# they must never imply or encode a recommended/current ONNX Runtime release.
+FAKE_ORT_VERSION = "0.0.0+test"
 
-def test_cuda_host_with_plain_cpu_distribution_requires_repair_even_if_cuda_visible():
+
+def test_cuda_provider_is_healthy_even_if_cpu_distribution_metadata_exists():
     assert INSTALL._needs_gpu_repair(
         cuda_host=True,
         providers=["CUDAExecutionProvider", "CPUExecutionProvider"],
-        cpu_version="1.28.0",
-        gpu_version="1.28.0",
-    ) is True
-
-
-def test_clean_gpu_runtime_needs_no_repair():
-    assert INSTALL._needs_gpu_repair(
-        cuda_host=True,
-        providers=["CUDAExecutionProvider", "CPUExecutionProvider"],
-        cpu_version=None,
-        gpu_version="1.28.0",
     ) is False
+
+
+def test_cuda_provider_is_source_of_truth_even_without_gpu_dist_metadata(monkeypatch):
+    monkeypatch.setattr(
+        INSTALL,
+        "_fresh_providers",
+        lambda: (["CUDAExecutionProvider", "CPUExecutionProvider"], None),
+    )
+    monkeypatch.setattr(INSTALL, "_dist_version", lambda _name: None)
+
+    def should_not_run():
+        raise AssertionError("healthy unmanaged CUDA ORT must not be replaced")
+
+    monkeypatch.setattr(INSTALL, "_cuda_host", should_not_run)
+    monkeypatch.setattr(
+        INSTALL,
+        "_run_pip",
+        lambda *args: (_ for _ in ()).throw(AssertionError("pip must not run")),
+    )
+
+    assert INSTALL.main() == 0
+
+
+def test_missing_cuda_provider_requires_repair_on_cuda_host():
+    assert INSTALL._needs_gpu_repair(
+        cuda_host=True,
+        providers=["AzureExecutionProvider", "CPUExecutionProvider"],
+    ) is True
 
 
 def test_cpu_host_is_left_unchanged():
     assert INSTALL._needs_gpu_repair(
         cuda_host=False,
         providers=["CPUExecutionProvider"],
-        cpu_version="1.28.0",
-        gpu_version=None,
     ) is False
 
 
-def test_manager_post_install_removes_both_owners_then_installs_only_gpu(monkeypatch):
+def test_cuda_host_probe_runs_in_child_interpreter(monkeypatch):
+    calls = []
+
+    def fake_run(args, **kwargs):
+        calls.append((args, kwargs))
+        return SimpleNamespace(returncode=0, stdout="1\n", stderr="")
+
+    monkeypatch.setattr(INSTALL.subprocess, "run", fake_run)
+
+    assert INSTALL._cuda_host() is True
+    assert len(calls) == 1
+    args, kwargs = calls[0]
+    assert args[:2] == [INSTALL.sys.executable, "-c"]
+    assert "import torch" in args[2]
+    assert kwargs["capture_output"] is True
+
+
+def test_gpu_repair_reinstalls_detected_gpu_version_last_without_uninstalling_cpu(monkeypatch):
     monkeypatch.setattr(INSTALL, "_cuda_host", lambda: True)
     probes = iter(
         [
@@ -51,8 +88,8 @@ def test_manager_post_install_removes_both_owners_then_installs_only_gpu(monkeyp
     monkeypatch.setattr(INSTALL, "_fresh_providers", lambda: next(probes))
 
     versions = {
-        INSTALL.CPU_DIST: "1.28.0",
-        INSTALL.GPU_DIST: "1.28.0",
+        INSTALL.CPU_DIST: FAKE_ORT_VERSION,
+        INSTALL.GPU_DIST: FAKE_ORT_VERSION,
     }
     monkeypatch.setattr(INSTALL, "_dist_version", lambda name: versions.get(name))
 
@@ -61,9 +98,62 @@ def test_manager_post_install_removes_both_owners_then_installs_only_gpu(monkeyp
 
     assert INSTALL.main() == 0
     assert commands == [
-        ("uninstall", "-y", "onnxruntime", "onnxruntime-gpu"),
-        ("install", "--no-deps", "onnxruntime-gpu"),
+        (
+            "install",
+            "--force-reinstall",
+            "--no-deps",
+            f"onnxruntime-gpu=={FAKE_ORT_VERSION}",
+        )
     ]
+
+
+def test_missing_gpu_dist_metadata_installs_unpinned_gpu_package(monkeypatch):
+    monkeypatch.setattr(INSTALL, "_cuda_host", lambda: True)
+    probes = iter(
+        [
+            (["CPUExecutionProvider"], None),
+            (["CUDAExecutionProvider", "CPUExecutionProvider"], None),
+        ]
+    )
+    monkeypatch.setattr(INSTALL, "_fresh_providers", lambda: next(probes))
+    monkeypatch.setattr(
+        INSTALL,
+        "_dist_version",
+        lambda name: FAKE_ORT_VERSION if name == INSTALL.CPU_DIST else None,
+    )
+
+    commands = []
+    monkeypatch.setattr(INSTALL, "_run_pip", lambda *args: commands.append(args))
+
+    assert INSTALL.main() == 0
+    assert commands == [
+        ("install", "--force-reinstall", "--no-deps", "onnxruntime-gpu")
+    ]
+
+
+def test_healthy_gpu_fast_path_does_not_probe_cuda_or_run_pip(monkeypatch):
+    monkeypatch.setattr(
+        INSTALL,
+        "_fresh_providers",
+        lambda: (["CUDAExecutionProvider", "CPUExecutionProvider"], None),
+    )
+    monkeypatch.setattr(
+        INSTALL,
+        "_dist_version",
+        lambda _name: FAKE_ORT_VERSION,
+    )
+
+    def should_not_run():
+        raise AssertionError("healthy startup should not probe PyTorch CUDA")
+
+    monkeypatch.setattr(INSTALL, "_cuda_host", should_not_run)
+    monkeypatch.setattr(
+        INSTALL,
+        "_run_pip",
+        lambda *args: (_ for _ in ()).throw(AssertionError("pip must not run")),
+    )
+
+    assert INSTALL.main() == 0
 
 
 def test_failed_gpu_provider_verification_is_hard_error(monkeypatch):
@@ -78,7 +168,9 @@ def test_failed_gpu_provider_verification_is_hard_error(monkeypatch):
     monkeypatch.setattr(
         INSTALL,
         "_dist_version",
-        lambda name: "1.28.0" if name == INSTALL.CPU_DIST else None,
+        lambda name: FAKE_ORT_VERSION
+        if name in {INSTALL.CPU_DIST, INSTALL.GPU_DIST}
+        else None,
     )
     monkeypatch.setattr(INSTALL, "_run_pip", lambda *args: None)
 

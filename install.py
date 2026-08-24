@@ -1,12 +1,20 @@
 from __future__ import annotations
 
-"""ComfyUI-Manager post-install repair for InsightFace ONNX Runtime.
+"""Repair InsightFace's ONNX Runtime backend on CUDA ComfyUI hosts.
 
-InsightFace declares the CPU-only ``onnxruntime`` distribution as a hard dependency.
-On a CUDA ComfyUI host that package can overwrite the files provided by
-``onnxruntime-gpu`` even when the GPU distribution was already installed. Manager
-installs ``requirements.txt`` before executing this script, so this is the safe point
-to restore an unambiguous GPU runtime after InsightFace's dependencies settle.
+Several ComfyUI nodes (including InsightFace consumers and WD14 Tagger) legitimately
+declare the distribution named ``onnxruntime``. Pip treats that CPU distribution and
+``onnxruntime-gpu`` as separate projects even though both install the same import
+package. Dependency reconciliation can therefore overwrite a working GPU module with
+CPU files.
+
+The durable invariant is the live provider set, not pip ownership metadata. If the
+imported ONNX Runtime already exposes CUDAExecutionProvider, FaceRefine leaves it alone
+regardless of whether it came from pip, conda, or another package manager. If a CUDA
+ComfyUI host has lost that provider, reinstall the detected pip GPU distribution version
+last (or install an unpinned GPU distribution if none is registered), then verify in a
+fresh interpreter. ``prestartup_script.py`` runs this same check after Manager dependency
+reconciliation on every ComfyUI launch.
 """
 
 from importlib import metadata
@@ -27,12 +35,18 @@ def _dist_version(name: str) -> str | None:
 
 
 def _cuda_host() -> bool:
-    try:
-        import torch
-
-        return bool(torch.cuda.is_available() and getattr(torch.version, "cuda", None))
-    except Exception:
+    """Probe PyTorch CUDA in a child interpreter to avoid prestartup CUDA side effects."""
+    code = (
+        "import torch; "
+        "print('1' if torch.cuda.is_available() and torch.version.cuda else '0')"
+    )
+    proc = subprocess.run(
+        [sys.executable, "-c", code], text=True, capture_output=True, check=False
+    )
+    if proc.returncode != 0:
         return False
+    lines = proc.stdout.strip().splitlines()
+    return bool(lines and lines[-1].strip() == "1")
 
 
 def _fresh_providers() -> tuple[list[str], str | None]:
@@ -54,46 +68,44 @@ def _fresh_providers() -> tuple[list[str], str | None]:
         return [], f"could not parse ONNX Runtime provider probe: {exc}"
 
 
-def _needs_gpu_repair(
-    *,
-    cuda_host: bool,
-    providers: list[str],
-    cpu_version: str | None,
-    gpu_version: str | None,
-) -> bool:
-    if not cuda_host:
-        return False
-    if cpu_version is not None:
-        return True
-    return gpu_version is None or CUDA_PROVIDER not in providers
+def _needs_gpu_repair(*, cuda_host: bool, providers: list[str]) -> bool:
+    return bool(cuda_host) and CUDA_PROVIDER not in providers
 
 
 def _run_pip(*args: str) -> None:
     subprocess.check_call([sys.executable, "-m", "pip", *args])
 
 
+def _gpu_install_args(gpu_version: str | None) -> tuple[str, ...]:
+    requirement = GPU_DIST if gpu_version is None else f"{GPU_DIST}=={gpu_version}"
+    # Reinstall the GPU payload last. Keeping plain onnxruntime's dist-info when some
+    # other node requires it prevents Manager from reintroducing CPU files next launch.
+    return ("install", "--force-reinstall", "--no-deps", requirement)
+
+
 def main() -> int:
+    # The provider is the source of truth. A healthy conda/custom ORT install must not be
+    # replaced merely because pip has no onnxruntime-gpu distribution metadata.
+    providers, probe_error = _fresh_providers()
+    gpu_version = _dist_version(GPU_DIST)
+    if CUDA_PROVIDER in providers:
+        source = gpu_version or "non-pip/unregistered"
+        print(
+            "[H3FaceRefine install] InsightFace ONNX Runtime GPU verified: "
+            f"providers={providers} onnxruntime-gpu={source}"
+        )
+        return 0
+
     if not _cuda_host():
         print("[H3FaceRefine install] non-CUDA host: leaving ONNX Runtime unchanged")
         return 0
 
-    providers, probe_error = _fresh_providers()
-    cpu_version = _dist_version(CPU_DIST)
-    gpu_version = _dist_version(GPU_DIST)
-    if not _needs_gpu_repair(
-        cuda_host=True,
-        providers=providers,
-        cpu_version=cpu_version,
-        gpu_version=gpu_version,
-    ):
-        print(
-            "[H3FaceRefine install] InsightFace ONNX Runtime already GPU-clean: "
-            f"providers={providers} onnxruntime-gpu={gpu_version}"
-        )
+    if not _needs_gpu_repair(cuda_host=True, providers=providers):
         return 0
 
+    cpu_version = _dist_version(CPU_DIST)
     print(
-        "[H3FaceRefine install] repairing InsightFace ONNX Runtime: "
+        "[H3FaceRefine install] repairing InsightFace ONNX Runtime GPU payload: "
         f"onnxruntime={cpu_version or 'absent'} "
         f"onnxruntime-gpu={gpu_version or 'absent'} "
         f"providers={providers or 'unavailable'}"
@@ -101,23 +113,19 @@ def main() -> int:
     if probe_error:
         print(f"[H3FaceRefine install] provider probe detail: {probe_error}")
 
-    # Both distributions own the same ``onnxruntime`` module tree. Remove both first,
-    # then install one owner. ``--no-deps`` avoids churning NumPy and other established
-    # ComfyUI packages merely to replace the runtime backend.
-    _run_pip("uninstall", "-y", CPU_DIST, GPU_DIST)
-    _run_pip("install", "--no-deps", GPU_DIST)
+    _run_pip(*_gpu_install_args(gpu_version))
 
     repaired, repaired_error = _fresh_providers()
     if CUDA_PROVIDER not in repaired:
         detail = f"; probe error={repaired_error}" if repaired_error else ""
         raise RuntimeError(
-            "H3 FaceRefine installed onnxruntime-gpu, but CUDAExecutionProvider is still "
-            f"unavailable (providers={repaired}){detail}. Refusing to leave a CUDA ComfyUI "
-            "host on silent CPU InsightFace fallback."
+            "H3 FaceRefine reinstalled onnxruntime-gpu, but CUDAExecutionProvider is "
+            f"still unavailable (providers={repaired}){detail}. Refusing silent CPU "
+            "InsightFace fallback."
         )
 
     print(
-        "[H3FaceRefine install] GPU ONNX Runtime verified: "
+        "[H3FaceRefine install] GPU ONNX Runtime repaired and verified: "
         f"providers={repaired} onnxruntime-gpu={_dist_version(GPU_DIST)}"
     )
     return 0

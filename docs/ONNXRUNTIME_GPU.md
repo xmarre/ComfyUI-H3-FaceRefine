@@ -1,17 +1,23 @@
 # InsightFace ONNX Runtime on CUDA hosts
 
-`insightface` declares the CPU-named `onnxruntime` distribution as a hard dependency. The CPU and GPU ONNX Runtime distributions install the same `onnxruntime` Python module tree, and pip does not treat `onnxruntime-gpu` as satisfying InsightFace's `onnxruntime` metadata requirement. A dependency refresh can therefore install the CPU distribution after a working GPU runtime and silently remove `CUDAExecutionProvider` from the imported module.
+`insightface` declares the CPU-named `onnxruntime` distribution as a hard dependency. Other ComfyUI extensions can do the same; notably, ComfyUI-WD14-Tagger includes plain `onnxruntime` in its requirements. Pip treats `onnxruntime` and `onnxruntime-gpu` as separate distributions even though both install the same `onnxruntime` Python module tree. A later dependency reconciliation can therefore overwrite a previously working GPU module with CPU files and remove `CUDAExecutionProvider`.
 
-ComfyUI-Manager installs `requirements.txt` before executing this repository's `install.py`. On a CUDA host, `install.py` therefore checks the runtime in a fresh Python process after dependency installation. If the plain CPU distribution is installed, both ORT distributions are removed and a single `onnxruntime-gpu` distribution is installed with `--no-deps`, then `CUDAExecutionProvider` is verified. The `--no-deps` flag avoids unrelated NumPy/package churn in an established ComfyUI environment.
+For a mixed ComfyUI installation, the durable invariant is the **live provider set**, not pip distribution ownership. If a fresh interpreter already reports `CUDAExecutionProvider`, FaceRefine leaves that runtime untouched even when no `onnxruntime-gpu` pip metadata exists (for example, a working conda-managed installation). Plain `onnxruntime` metadata may also remain when another node requires it.
 
-The runtime tracker also checks the provider immediately before InsightFace FaceAnalysis is constructed. A CUDA ComfyUI host with only `CPUExecutionProvider` is treated as a broken environment and identity tracking stops with a direct repair message instead of silently running the expensive CPU path. Native CPU hosts remain supported. Deliberate CPU identity execution on a CUDA host can be enabled with `H3FACEREFINE_ALLOW_CPU_IDENTITY=1`.
+Two lifecycle hooks enforce that invariant:
 
-Manual repair uses the same ownership rule:
+- `install.py` runs when ComfyUI-Manager actually installs or updates FaceRefine. If a CUDA host lacks `CUDAExecutionProvider`, it force-reinstalls the detected installed `onnxruntime-gpu` version with `--no-deps`; if no pip GPU distribution is registered, it installs `onnxruntime-gpu` without a version pin. It then verifies providers in a fresh interpreter.
+- `prestartup_script.py` runs on every ComfyUI launch **after Manager's own prestartup/dependency work and before normal custom-node imports**. Healthy GPU environments take a provider-probe fast path and do not run pip. If another dependency has overwritten the module payload, the GPU wheel is installed last before InsightFace or WD14 can create an ONNX session.
+
+No ONNX Runtime release number is hardcoded by FaceRefine. Existing managed GPU installs retain their detected version during repair; unmanaged working CUDA runtimes are left alone; missing managed GPU installs use the package index's current unpinned `onnxruntime-gpu` candidate.
+
+The runtime tracker has a final safety invariant. When identity tracking is actually required, a CUDA ComfyUI host with only `CPUExecutionProvider` is a hard configuration failure. It is checked before `tracking_fixes` enters its recoverable optional-InsightFace exception block, so a broken GPU backend cannot silently degrade the run to motion-only subject tracking. Native CPU hosts remain supported. Deliberate CPU identity execution on a CUDA host can be enabled with `H3FACEREFINE_ALLOW_CPU_IDENTITY=1`.
+
+Manual repair, when needed, mirrors the self-healing policy without a release pin:
 
 ```bash
-python -m pip uninstall -y onnxruntime onnxruntime-gpu
-python -m pip install --no-deps onnxruntime-gpu
+python -m pip install --force-reinstall --no-deps onnxruntime-gpu
 python -c "import onnxruntime as ort; print(ort.__version__); print(ort.get_available_providers())"
 ```
 
-The final provider list must contain `CUDAExecutionProvider` before ComfyUI is restarted.
+The final provider list must contain `CUDAExecutionProvider` before identity-aware FaceRefine tracking is used.

@@ -112,3 +112,35 @@ def test_cpu_identity_is_rejected_only_on_cuda_host_without_explicit_override():
     assert RUNTIME._cpu_backend_is_misconfigured(
         "cuda", cuda_host=True, allow_cpu=False
     ) is False
+
+
+def test_identity_requirement_guard_propagates_backend_failure_before_optional_fallback(monkeypatch):
+    guarded = RUNTIME._guard_identity_requirement(lambda *_args, **_kwargs: True)
+
+    def fail_backend():
+        raise RuntimeError("broken CUDA ORT")
+
+    monkeypatch.setattr(RUNTIME, "_validate_identity_backend", fail_backend)
+
+    try:
+        guarded([], object(), True)
+    except RuntimeError as exc:
+        assert "broken CUDA ORT" in str(exc)
+    else:
+        raise AssertionError("identity-required backend failure must not degrade to motion-only")
+
+
+def test_identity_requirement_guard_does_not_touch_backend_when_identity_is_unused(monkeypatch):
+    guarded = RUNTIME._guard_identity_requirement(lambda *_args, **_kwargs: False)
+    calls = []
+    monkeypatch.setattr(RUNTIME, "_validate_identity_backend", lambda: calls.append(True))
+
+    assert guarded([], None, False) is False
+    assert calls == []
+
+
+def test_identity_requirement_guard_is_idempotent():
+    original = lambda *_args, **_kwargs: False
+    once = RUNTIME._guard_identity_requirement(original)
+    twice = RUNTIME._guard_identity_requirement(once)
+    assert twice is once
