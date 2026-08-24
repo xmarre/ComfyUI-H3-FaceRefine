@@ -13,12 +13,16 @@ assert SPEC is not None and SPEC.loader is not None
 INSTALL = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(INSTALL)
 
+# Deliberately non-release-looking PEP 440 fixture. Tests verify version propagation;
+# they must never imply or encode a recommended/current ONNX Runtime release.
+FAKE_ORT_VERSION = "0.0.0+test"
+
 
 def test_cuda_provider_is_healthy_even_if_cpu_distribution_metadata_exists():
     assert INSTALL._needs_gpu_repair(
         cuda_host=True,
         providers=["CUDAExecutionProvider", "CPUExecutionProvider"],
-        gpu_version="1.28.0",
+        gpu_version=FAKE_ORT_VERSION,
     ) is False
 
 
@@ -26,7 +30,7 @@ def test_missing_cuda_provider_requires_repair_on_cuda_host():
     assert INSTALL._needs_gpu_repair(
         cuda_host=True,
         providers=["AzureExecutionProvider", "CPUExecutionProvider"],
-        gpu_version="1.28.0",
+        gpu_version=FAKE_ORT_VERSION,
     ) is True
 
 
@@ -55,7 +59,7 @@ def test_cuda_host_probe_runs_in_child_interpreter(monkeypatch):
     assert kwargs["capture_output"] is True
 
 
-def test_gpu_repair_reinstalls_existing_gpu_version_last_without_uninstalling_cpu(monkeypatch):
+def test_gpu_repair_reinstalls_detected_gpu_version_last_without_uninstalling_cpu(monkeypatch):
     monkeypatch.setattr(INSTALL, "_cuda_host", lambda: True)
     probes = iter(
         [
@@ -66,8 +70,8 @@ def test_gpu_repair_reinstalls_existing_gpu_version_last_without_uninstalling_cp
     monkeypatch.setattr(INSTALL, "_fresh_providers", lambda: next(probes))
 
     versions = {
-        INSTALL.CPU_DIST: "1.28.0",
-        INSTALL.GPU_DIST: "1.28.0",
+        INSTALL.CPU_DIST: FAKE_ORT_VERSION,
+        INSTALL.GPU_DIST: FAKE_ORT_VERSION,
     }
     monkeypatch.setattr(INSTALL, "_dist_version", lambda name: versions.get(name))
 
@@ -80,12 +84,12 @@ def test_gpu_repair_reinstalls_existing_gpu_version_last_without_uninstalling_cp
             "install",
             "--force-reinstall",
             "--no-deps",
-            "onnxruntime-gpu==1.28.0",
+            f"onnxruntime-gpu=={FAKE_ORT_VERSION}",
         )
     ]
 
 
-def test_healthy_gpu_fast_path_does_not_import_cuda_host_probe(monkeypatch):
+def test_healthy_gpu_fast_path_does_not_probe_cuda_or_run_pip(monkeypatch):
     monkeypatch.setattr(
         INSTALL,
         "_fresh_providers",
@@ -94,7 +98,7 @@ def test_healthy_gpu_fast_path_does_not_import_cuda_host_probe(monkeypatch):
     monkeypatch.setattr(
         INSTALL,
         "_dist_version",
-        lambda name: "1.28.0" if name == INSTALL.GPU_DIST else "1.28.0",
+        lambda _name: FAKE_ORT_VERSION,
     )
 
     def should_not_run():
@@ -122,7 +126,9 @@ def test_failed_gpu_provider_verification_is_hard_error(monkeypatch):
     monkeypatch.setattr(
         INSTALL,
         "_dist_version",
-        lambda name: "1.28.0" if name in {INSTALL.CPU_DIST, INSTALL.GPU_DIST} else None,
+        lambda name: FAKE_ORT_VERSION
+        if name in {INSTALL.CPU_DIST, INSTALL.GPU_DIST}
+        else None,
     )
     monkeypatch.setattr(INSTALL, "_run_pip", lambda *args: None)
 
