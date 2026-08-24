@@ -59,14 +59,15 @@ Restart ComfyUI. The nodes appear under **MiniMax H3/Face Refine**.
 Python packages (`ultralytics`, `scipy`, `insightface`) install automatically from
 `requirements.txt` / `pyproject.toml`.
 
-> **A note on onnxruntime.** `insightface` declares the CPU-named `onnxruntime` distribution as a
-> dependency even though `onnxruntime-gpu` supplies the same Python module. Pip does not treat those
-> distribution names as interchangeable. CUDA users should keep only one runtime distribution:
-> uninstall CPU `onnxruntime`, install a GPU build compatible with the environment's CUDA major
-> version, then verify
-> `python -c "import onnxruntime as ort; print(ort.get_available_providers())"` contains
-> `CUDAExecutionProvider`. Do not reinstall CPU `onnxruntime` merely to satisfy InsightFace's pip
-> metadata warning after the GPU module is working.
+> **A note on onnxruntime.** `insightface` and some other ComfyUI extensions declare the CPU-named
+> `onnxruntime` distribution even on CUDA systems. Pip treats `onnxruntime` and
+> `onnxruntime-gpu` as separate distributions even though both install the same Python module tree.
+> FaceRefine therefore does **not** pin an ONNX Runtime release or require CPU package metadata to be
+> removed. On install/update and again at ComfyUI prestartup it checks the providers dynamically; if
+> a CUDA host has lost `CUDAExecutionProvider`, it reinstalls the already installed
+> `onnxruntime-gpu` version last (or installs the current unpinned GPU package if none is installed)
+> and verifies the provider in a fresh interpreter. See
+> [`docs/ONNXRUNTIME_GPU.md`](docs/ONNXRUNTIME_GPU.md) for the repair policy and manual check.
 
 **Additionally, to run the example workflows:**
 
