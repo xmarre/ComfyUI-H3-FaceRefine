@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Fixed CUDA InsightFace environments silently regressing to CPU after dependency refreshes. Upstream `insightface` declares the CPU-only `onnxruntime` distribution, so ComfyUI-Manager now runs a post-install repair on CUDA hosts that removes both overlapping ORT distributions, installs only `onnxruntime-gpu` without dependency churn, and verifies `CUDAExecutionProvider` in a fresh Python process.
+- CUDA ComfyUI hosts now refuse accidental CPU-only InsightFace identity fallback at runtime instead of spending tens of seconds on a misconfigured backend. Deliberate CPU identity use remains available through `H3FACEREFINE_ALLOW_CPU_IDENTITY=1`; genuine CPU hosts are unchanged.
 - Fixed sparse lost-target identity reacquisition being disabled by broad crowd-transition flags. Once a singleton candidate has already failed identity and keeps the same YOLO geometry, it is now treated as the same negative tracklet even while the conservative crowd guard remains set; periodic probes and exact reverse backfill preserve subject safety and target-return timing without re-running InsightFace on every rejected frame.
 - Fixed false `Continuum canvas guidance unavailable` diagnostics in the real ComfyUI `INPUT_IS_LIST` execution path. Canvas guidance now soft-normalizes the same exact singleton-list `H3FACEXFORM` contract as `H3 Continuum Face Refine` before reading tracker geometry, while preserving the original list object for downstream refinement and still failing soft on genuinely missing or ambiguous transform geometry.
 - Added regression coverage for scalar, singleton-list, nested-singleton, and ambiguous-list canvas-guidance inputs, including the actual outer-wrapper delegation shape used by ComfyUI.
