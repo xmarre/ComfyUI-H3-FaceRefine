@@ -40,7 +40,7 @@
 - Reworked Continuum stitch-back to transfer only the learned residual onto the untouched full-resolution source, eliminating absolute resized-crop replacement and moving black crop-boundary artifacts.
 - Added causal detector-dropout compositing, fractional/subpixel mask geometry, source-space feathering, and residual colour-bias handling.
 - Removed the obsolete crop-magnification hard gate. The validated Continuum baseline is 512x512; larger canvases are optional quality/performance A/B choices rather than required fixes for sub-1x crops.
-- Set the current validated Continuum sampler-2 guidance to `simple`, 12 steps, `denoise=0.45`; the earlier 4-step suggestion is intentionally removed: GPU visual testing showed obvious artifacts at four sampler-2 steps in the Continuum/Spectrum path.
+- Set the current validated Continuum sampler-2 guidance to `simple`, 12 steps, `denoise=0.45`; the earlier 4-step suggestion was intentionally removed: GPU visual testing showed obvious artifacts at four sampler-2 steps in the Continuum/Spectrum path.
 - Documented CUDA InsightFace/ONNX Runtime setup and the `onnxruntime` versus `onnxruntime-gpu` package-metadata caveat.
 - Added comprehensive CPU contract coverage for physical-group reconstruction, mask composition, conditioning preservation, audio locking, VAE topology, residual stitch invariants, moving-edge regressions, canvas guidance, and standalone import compatibility.
 - Added tested-main GitHub Release automation, expanded Python CI, release archive validation, and pinned Comfy Registry publishing for the xmarre fork.
