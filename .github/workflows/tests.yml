@@ -88,6 +88,7 @@ jobs:
           prefix = f"ComfyUI-H3-FaceRefine-v{os.environ['VERSION']}/"
           required = {
               prefix + "__init__.py",
+              prefix + "install.py",
               prefix + "pyproject.toml",
               prefix + "README.md",
               prefix + "requirements.txt",
@@ -95,6 +96,9 @@ jobs:
               prefix + "continuum_refine.py",
               prefix + "quality_fixes.py",
               prefix + "quality_fixes_v2.py",
+              prefix + "tracking_fixes.py",
+              prefix + "tracking_performance.py",
+              prefix + "tracking_runtime.py",
               prefix + "no_face_passthrough.py",
               prefix + "docs/H3_CONTINUUM_WORKFLOW_FRAGMENT.md",
           }

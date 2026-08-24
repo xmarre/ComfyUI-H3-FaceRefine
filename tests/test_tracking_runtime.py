@@ -97,3 +97,18 @@ def test_identity_provider_state_does_not_require_onnxruntime(monkeypatch):
     assert backend == "unavailable"
     assert providers == ()
     assert "onnxruntime unavailable" in error
+
+
+def test_cpu_identity_is_rejected_only_on_cuda_host_without_explicit_override():
+    assert RUNTIME._cpu_backend_is_misconfigured(
+        "cpu", cuda_host=True, allow_cpu=False
+    ) is True
+    assert RUNTIME._cpu_backend_is_misconfigured(
+        "cpu", cuda_host=False, allow_cpu=False
+    ) is False
+    assert RUNTIME._cpu_backend_is_misconfigured(
+        "cpu", cuda_host=True, allow_cpu=True
+    ) is False
+    assert RUNTIME._cpu_backend_is_misconfigured(
+        "cuda", cuda_host=True, allow_cpu=False
+    ) is False
