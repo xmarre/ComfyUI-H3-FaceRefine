@@ -33,12 +33,18 @@ def _dist_version(name: str) -> str | None:
 
 
 def _cuda_host() -> bool:
-    try:
-        import torch
-
-        return bool(torch.cuda.is_available() and getattr(torch.version, "cuda", None))
-    except Exception:
+    """Probe PyTorch CUDA in a child interpreter to avoid prestartup CUDA side effects."""
+    code = (
+        "import torch; "
+        "print('1' if torch.cuda.is_available() and torch.version.cuda else '0')"
+    )
+    proc = subprocess.run(
+        [sys.executable, "-c", code], text=True, capture_output=True, check=False
+    )
+    if proc.returncode != 0:
         return False
+    lines = proc.stdout.strip().splitlines()
+    return bool(lines and lines[-1].strip() == "1")
 
 
 def _fresh_providers() -> tuple[list[str], str | None]:
@@ -83,8 +89,8 @@ def _gpu_install_args(gpu_version: str | None) -> tuple[str, ...]:
 
 
 def main() -> int:
-    # Fast healthy path: probing ORT is much cheaper than importing torch during every
-    # startup.  A verified GPU distribution/provider needs no further work.
+    # Fast healthy path: probing ORT is much cheaper than probing PyTorch CUDA during
+    # every startup. A verified GPU distribution/provider needs no further work.
     providers, probe_error = _fresh_providers()
     gpu_version = _dist_version(GPU_DIST)
     if gpu_version is not None and CUDA_PROVIDER in providers:
