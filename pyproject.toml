@@ -14,8 +14,8 @@ dependencies = [
     "scipy",
     "insightface",
 ]
-# CUDA: replace CPU `onnxruntime` with a compatible `onnxruntime-gpu` build and
-# verify CUDAExecutionProvider.
+# CUDA runtime policy is provider-driven and unpinned; install.py/prestartup_script.py
+# repair a missing CUDAExecutionProvider without encoding a specific ORT release.
 
 [project.urls]
 Repository = "https://github.com/xmarre/ComfyUI-H3-FaceRefine"
