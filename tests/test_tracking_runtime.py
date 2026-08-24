@@ -53,8 +53,8 @@ def test_new_multiface_run_gets_immediate_checkpoint_after_single_frame_gap():
     )
 
     assert crowded[0] is True
-    assert crowded[2] is True
-    assert crowded[3] is True
+    assert crowded[2] is True  # singleton transition safety is preserved
+    assert crowded[3] is True  # a new crowd run is checked immediately
 
 
 def test_expanded_singleton_transition_guard_is_preserved():
@@ -80,6 +80,8 @@ def test_expanded_singleton_transition_guard_is_preserved():
 
 
 def test_identity_provider_state_does_not_require_onnxruntime(monkeypatch):
+    # The module is intentionally optional in CPU-only CI.  A failed import/query must
+    # remain diagnostic rather than making FaceRefine itself unloadable.
     import builtins
 
     real_import = builtins.__import__
