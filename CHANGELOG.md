@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Fixed sparse lost-target identity reacquisition being disabled by broad crowd-transition flags. Once a singleton candidate has already failed identity and keeps the same YOLO geometry, it is now treated as the same negative tracklet even while the conservative crowd guard remains set; periodic probes and exact reverse backfill preserve subject safety and target-return timing without re-running InsightFace on every rejected frame.
 - Fixed false `Continuum canvas guidance unavailable` diagnostics in the real ComfyUI `INPUT_IS_LIST` execution path. Canvas guidance now soft-normalizes the same exact singleton-list `H3FACEXFORM` contract as `H3 Continuum Face Refine` before reading tracker geometry, while preserving the original list object for downstream refinement and still failing soft on genuinely missing or ambiguous transform geometry.
 - Added regression coverage for scalar, singleton-list, nested-singleton, and ambiguous-list canvas-guidance inputs, including the actual outer-wrapper delegation shape used by ComfyUI.
 - Reduced redundant InsightFace work in stable multi-face scenes. Clear motion association now uses periodic 12-frame crowd identity checkpoints instead of evaluating identity on every frame in the expanded crowd window; ambiguity, implausible motion, tracking gaps, and singleton crowd transitions still force immediate identity checks.

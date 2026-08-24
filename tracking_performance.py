@@ -192,12 +192,17 @@ def _associate_boxes_sparse(
                 and (ambiguous or safety_identity or crowded[i])
             )
 
+            # Once a singleton candidate has already failed identity and continues as the
+            # same YOLO tracklet, a broad crowd-transition flag must not force another
+            # expensive identity pass on every frame.  The first failed probe establishes
+            # the negative tracklet; geometry changes, ambiguity, or an additional candidate
+            # still bypass this path and force identity immediately.  Successful later probes
+            # retain exact output timing through the existing bounded reverse backfill.
             continuing_negative = (
                 identity_required
                 and safety_identity
                 and len(boxes) == 1
                 and not ambiguous
-                and not crowded[i]
                 and last_negative_frame is not None
                 and _same_negative_tracklet(
                     best, last_negative_box, i - int(last_negative_frame)
