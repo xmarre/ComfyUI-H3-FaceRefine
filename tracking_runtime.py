@@ -23,6 +23,7 @@ from typing import Mapping
 
 _INSTALL_MARKER = "_h3_tracking_runtime_fixes_installed"
 _RECOGNISER_MARKER = "_h3_identity_provider_diagnostics_installed"
+_IDENTITY_REQUIREMENT_MARKER = "_h3_identity_requirement_guard_installed"
 _CROWD_CHECKPOINT_STRIDE = 12
 _CPU_PROVIDER_WARNING_EMITTED = False
 _ALLOW_CPU_ENV = "H3FACEREFINE_ALLOW_CPU_IDENTITY"
@@ -129,11 +130,10 @@ def _validate_identity_backend() -> None:
         backend, cuda_host=cuda_host, allow_cpu=allow_cpu
     ):
         raise RuntimeError(
-            "InsightFace identity backend is CPU on a CUDA ComfyUI host. This usually means "
-            "InsightFace's hard dependency on the CPU-only 'onnxruntime' package overwrote "
-            "'onnxruntime-gpu'. Refusing silent CPU fallback. Re-run this custom node's "
-            "install.py (or reinstall/update it through ComfyUI-Manager), restart ComfyUI, "
-            "and verify onnxruntime.get_available_providers() contains "
+            "InsightFace identity backend is CPU on a CUDA ComfyUI host. FaceRefine's "
+            "prestartup repair should restore the GPU ONNX Runtime payload before custom "
+            "nodes load. Refusing motion-only degradation. Restart ComfyUI after updating "
+            "FaceRefine and verify onnxruntime.get_available_providers() contains "
             f"CUDAExecutionProvider. providers={provider_text}"
         )
 
@@ -150,6 +150,28 @@ def _validate_identity_backend() -> None:
             f"[H3FaceRefine] CPU identity fallback was explicitly allowed by {_ALLOW_CPU_ENV}."
         )
     _CPU_PROVIDER_WARNING_EMITTED = True
+
+
+def _guard_identity_requirement(original_should_use_identity):
+    """Validate ORT before tracking_fixes enters its recoverable InsightFace try/except.
+
+    ``tracking_fixes`` intentionally degrades when optional identity extraction itself
+    fails.  Backend misconfiguration is different: silently converting an identity-
+    required crowd/reacquisition pass to motion-only tracking can switch subjects.  This
+    wrapper runs outside that recoverable block, so a broken CUDA backend remains fatal.
+    """
+    if getattr(original_should_use_identity, _IDENTITY_REQUIREMENT_MARKER, False):
+        return original_should_use_identity
+
+    @wraps(original_should_use_identity)
+    def should_use_identity(*args, **kwargs):
+        required = bool(original_should_use_identity(*args, **kwargs))
+        if required:
+            _validate_identity_backend()
+        return required
+
+    setattr(should_use_identity, _IDENTITY_REQUIREMENT_MARKER, True)
+    return should_use_identity
 
 
 def install_tracking_runtime_fixes(node_class_mappings: Mapping[str, type]) -> None:
@@ -187,9 +209,18 @@ def install_tracking_runtime_fixes(node_class_mappings: Mapping[str, type]) -> N
         checkpointed_crowded_frames._h3_checkpointed_crowd_policy = True
         tracking["_crowded_frames"] = checkpointed_crowded_frames
 
-    # Validate at the moment InsightFace is actually requested, before the expensive
-    # FaceAnalysis construction/inference path starts. Genuine CPU hosts keep the old
-    # warning-only behavior; CUDA hosts reject a CPU-only backend unless explicitly allowed.
+    original_should_use_identity = tracking.get("_should_use_identity")
+    if not callable(original_should_use_identity):
+        raise ImportError(
+            "tracking runtime fixes could not locate the identity-requirement policy"
+        )
+    tracking["_should_use_identity"] = _guard_identity_requirement(
+        original_should_use_identity
+    )
+
+    # Keep a second provider check directly on recogniser construction as defence in
+    # depth.  The requirement guard above is the one that intentionally lives outside
+    # tracking_fixes' recoverable InsightFace exception boundary.
     node_module = sys.modules.get(cls.__module__)
     if node_module is None or not hasattr(node_module, "_face_recogniser"):
         raise ImportError(
@@ -251,5 +282,6 @@ __all__ = [
     "install_tracking_runtime_fixes",
     "_checkpointed_crowded_frames",
     "_cpu_backend_is_misconfigured",
+    "_guard_identity_requirement",
     "_identity_provider_state",
 ]
