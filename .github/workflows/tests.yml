@@ -89,6 +89,7 @@ jobs:
           required = {
               prefix + "__init__.py",
               prefix + "install.py",
+              prefix + "prestartup_script.py",
               prefix + "pyproject.toml",
               prefix + "README.md",
               prefix + "requirements.txt",
