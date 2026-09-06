@@ -67,7 +67,7 @@ jobs:
               )
           if project["tool"]["comfy"]["PublisherId"] != "xmarre":
               raise SystemExit("Comfy Registry PublisherId must be xmarre for this fork")
-          expected_repo = "https://github.com/xmarre/ComfyUI-H3-FaceRefine"
+          expected_repo = "https://github.com/xmarre/ComfyUI-H3-FaceRefine-Plus"
           if project["project"]["urls"]["Repository"] != expected_repo:
               raise SystemExit("project Repository URL does not point at the xmarre fork")
           print(parsed)

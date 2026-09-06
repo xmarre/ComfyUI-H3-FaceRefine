@@ -18,10 +18,10 @@ dependencies = [
 # repair a missing CUDAExecutionProvider without encoding a specific ORT release.
 
 [project.urls]
-Repository = "https://github.com/xmarre/ComfyUI-H3-FaceRefine"
-"Bug Tracker" = "https://github.com/xmarre/ComfyUI-H3-FaceRefine/issues"
+Repository = "https://github.com/xmarre/ComfyUI-H3-FaceRefine-Plus"
+"Bug Tracker" = "https://github.com/xmarre/ComfyUI-H3-FaceRefine-Plus/issues"
 
 [tool.comfy]
 PublisherId = "xmarre"
 DisplayName = "ComfyUI-H3-FaceRefine"
-Icon = "https://raw.githubusercontent.com/xmarre/ComfyUI-H3-FaceRefine/main/assets/icon-h3-facerefine.svg"
+Icon = "https://raw.githubusercontent.com/xmarre/ComfyUI-H3-FaceRefine-Plus/main/assets/icon-h3-facerefine.svg"
