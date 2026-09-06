@@ -1,4 +1,6 @@
-# ComfyUI-H3-FaceRefine
+# ComfyUI-H3-FaceRefine-Plus
+
+> **Plus fork:** This is the `xmarre` maintained Plus fork of [Carasibana/ComfyUI-H3-FaceRefine](https://github.com/Carasibana/ComfyUI-H3-FaceRefine). It preserves the upstream project's foundation while carrying additional features, integrations, fixes, and behavior that may intentionally diverge from upstream.
 
 **A ComfyUI custom node set to refine and improve the quality of small faces in MiniMax H3 video.**
 
@@ -42,7 +44,7 @@ or the refined face boils.
 Clone into `ComfyUI/custom_nodes/`:
 
 ```bash
-git clone https://github.com/xmarre/ComfyUI-H3-FaceRefine.git
+git clone https://github.com/xmarre/ComfyUI-H3-FaceRefine-Plus.git ComfyUI-H3-FaceRefine
 ```
 
 Restart ComfyUI. The nodes appear under **MiniMax H3/Face Refine**.
